@@ -24,17 +24,36 @@ scalaVersion := "2.13.8"
 
 val catsVersion = "2.7.0"
 val catsEffectVersion = "3.3.12"
-val AkkaVersion = "2.6.14"
+val akkaVersion = "2.6.19"
+val alpakkaVersion = "3.0.4"
+val akkaHTTPVersion = "10.2.9"
+val circeVersion = "0.14.1"
 
 libraryDependencies ++= Seq(
-  "org.typelevel" %% "cats-core" % catsVersion,
-  "org.typelevel" %% "cats-effect" % catsEffectVersion,
-  "com.lightbend.akka" %% "akka-stream-alpakka-mqtt-streaming" % "3.0.4",
-  "com.typesafe.akka" %% "akka-stream" % AkkaVersion,
-  "com.typesafe.akka" %% "akka-actor-typed" % AkkaVersion,
-  "org.scala-lang.modules" %% "scala-parallel-collections" % "1.0.4"
-//  "net.sigusr" %% "fs2-mqtt" % "1.0.0"
-)
+  "org.scala-lang.modules" %% "scala-parallel-collections" % "1.0.4",
+    "org.typelevel" %% "cats-core" % catsVersion,
+    "org.typelevel" %% "cats-effect" % catsEffectVersion,
+
+  "com.typesafe.akka" %% "akka-stream" % akkaVersion,
+  "com.typesafe.akka" %% "akka-actor-typed" % akkaVersion,
+  "com.typesafe.akka" %% "akka-actor" % akkaVersion,
+  "com.typesafe.akka" %% "akka-actor-typed" % akkaVersion,
+  "com.typesafe.akka" %% "akka-slf4j" % akkaVersion,
+  "org.slf4j" % "slf4j-simple" % "1.7.36",
+
+  //  "com.typesafe.akka" %% "akka-http" % akkaHTTPVersion,
+  //  "com.typesafe.akka" %% "akka-http-spray-json" % akkaHTTPVersion,
+
+  "com.lightbend.akka" %% "akka-stream-alpakka-mqtt" % alpakkaVersion,
+  //  "com.lightbend.akka" %% "akka-stream-alpakka-mqtt-streaming" % alpakkaVersion,
+  //  "net.sigusr" %% "fs2-mqtt" % "1.0.0"
+
+  "io.circe" %% "circe-core" % circeVersion,
+  "io.circe" %% "circe-generic" % circeVersion,
+  "io.circe" %% "circe-generic-extras" % circeVersion,
+  "io.circe" %% "circe-parser" % circeVersion,
+  "io.circe" %% "circe-yaml" % circeVersion,
+  )
 
 //addCompilerPlugin("org.typelevel" %% "kind-projector" % "0.13.2" cross CrossVersion.full)
 

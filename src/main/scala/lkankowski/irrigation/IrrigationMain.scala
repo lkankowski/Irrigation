@@ -1,201 +1,84 @@
 package lkankowski.irrigation
 
-import akka.actor.ActorSystem
-import akka.stream.alpakka.mqtt.streaming.{Command, ConnAck, Connect, ConnectFlags, ControlPacketFlags, Event, MqttSessionSettings, PubAck, Publish, SubAck, Subscribe}
-import akka.stream.scaladsl.{Keep, RestartFlow, Sink, Source, SourceQueueWithComplete, Tcp}
-import akka.stream.{OverflowStrategy, RestartSettings, ThrottleMode}
-import akka.stream.alpakka.mqtt.streaming.scaladsl.{ActorMqttClientSession, Mqtt}
-import akka.util.ByteString
-import akka.Done
-import cats.effect.{ExitCode, IO, IOApp}
+import akka.actor.{Actor, ActorRef, ActorSystem, PoisonPill, Props}
+import akka.event.Logging
 import cats.implicits._
 import org.slf4j.{Logger, LoggerFactory}
 
-import scala.collection.parallel.CollectionConverters._
-import scala.concurrent.duration.DurationInt
-import scala.concurrent.{ExecutionContextExecutor, Future, Promise}
 import scala.util.{Failure, Success, Try}
 
-/**
- * The MQTT Streaming connector. Work in progress...
- * See also: [[MqttPahoEcho]]
- *
- * Doc:
- * https://doc.akka.io/docs/alpakka/current/mqtt-streaming.html
- *
- * Inspiration:
- * https://github.com/michalstutzmann/scala-util/tree/master/src/main/scala/com/github/mwegrz/scalautil/mqtt
- *
- * Prerequisite:
- * Start the docker MQTT broker from: /docker/docker-compose.yml
- * eg by cmd line: docker-compose up -d mosquitto
- *
- */
-object MqttEcho extends App {
+object IrrigationMain extends App {
+  final class MqttActor(config: Config) extends Actor {
+    val logger = Logging(context.system, this)
+    implicit val system: ActorSystem = context.system
+//    import system.dispatcher
+
+    logger.info(s"${MqttActor.Name}: starting")
+
+    val mqtt = Mqtt(config.mqtt.host, config.mqtt.port, config.mqtt.username, config.mqtt.password, config.general.id)
+    mqtt.initialize(config.mqtt.discoveryTopicPrefix, config.general.name)
+
+    override def receive: Receive = {
+      case MqttActor.ModeIs(mode) => mqtt.publishMode(mode)
+    }
+  }
+
+  object MqttActor {
+    val Name = "Mqtt-actor"
+    def props = Props[MqttActor]()
+
+    sealed trait In
+    case class ModeIs(mode: Int) extends In
+  }
+
+  final class MainActor(config: Config) extends Actor {
+    import MainActor._
+
+    private val mqttRef: ActorRef = context.actorOf(Props(new MqttActor(config)), MqttActor.Name)
+    val logger = Logging(context.system, this)
+
+    logger.info("MainActor started")
+
+    // temporary
+    var currentMode: Int = 0
+
+    override def receive: Receive = {
+
+      case ModeOff  =>
+        logger.info("MainActor: Mode OFF")
+        currentMode = 0
+        mqttRef ! MqttActor.ModeIs(currentMode)
+      case ModeAuto =>
+        logger.info("MainActor: Mode Auto - irrigation will run at specified time")
+        currentMode = 1
+        mqttRef ! MqttActor.ModeIs(currentMode)
+      case ModeOneTime =>
+        logger.info("MainActor: Mode OneTime - irrigation will run at specified time and then mode will be turned off")
+        currentMode = 2
+        mqttRef ! MqttActor.ModeIs(currentMode)
+      case Exit =>
+        mqttRef ! PoisonPill
+        context.stop(self)
+        context.system.terminate()
+    }
+  }
+
+  object MainActor {
+    sealed trait In
+    case object Exit extends In
+    case object ModeOff extends In
+    case object ModeAuto extends In
+    case object ModeOneTime extends In
+  }
+
   val logger: Logger = LoggerFactory.getLogger(this.getClass)
-  val systemClient1 = ActorSystem("MqttEchoClient1")
-  val systemClient2 = ActorSystem("MqttEchoClient2")
 
-  val (host, port) = ("127.0.0.1", 1883)
-
-  (1 to 1).par.foreach(each => clientPublisher(each, systemClient1, host, port))
-  (1 to 2).par.foreach(each => clientSubscriber(each, systemClient2, host, port))
-
-  def clientPublisher(id: Int, system: ActorSystem, host: String, port: Int): Unit = {
-    implicit val sys = system
-    implicit val ec: ExecutionContextExecutor = system.dispatcher
-
-    val topic = "myTopic"
-    val clientId = s"pub-$id"
-    val pub = client(clientId, sys, host, port)
-
-
-    val connectCommand = Command(Connect(clientId, ConnectFlags.CleanSession))
-    if (! pub.done.isCompleted) pub.commands.offer(connectCommand)
-
-
-    Source(1 to 100)
-      .throttle(1, 1.second, 1, ThrottleMode.shaping)
-      .wireTap(each => logger.info(s"Client sending: $each"))
-      //TODO With mapAsync this is hanging after the 1st msg - do the results need to be consumed/pulled?
-      //It looks as if the ConnAck/PubAck/ need to be handled to see if we are still connected...
-      .map {
-        msg =>
-
-          //if (pub.done.isCompleted) throw new RuntimeException("Server not reachable")
-
-          //TODO What is the benefit of this meccano? Does the Promise carry a ACK Result?
-          val promise = Promise[None.type]()
-          //On the server each new retained message overwrites the previous one
-          val publish = Publish(ControlPacketFlags.RETAIN | ControlPacketFlags.QoSAtLeastOnceDelivery, topic, ByteString(msg.toString))
-          pub.session ! Command(publish, () => promise.complete(Try(None)))
-          promise.future
-      }
-      .runWith(Sink.ignore)
-  }
-
-  def clientSubscriber(id: Int, system: ActorSystem, host: String, port: Int): Unit = {
-    implicit val sys = system
-    implicit val ec: ExecutionContextExecutor = system.dispatcher
-
-    val topic = "myTopic"
-    val clientId = s"sub-$id"
-    val sub = client(clientId, sys, host, port)
-
-    sub.commands.offer(Command(Connect(clientId, ConnectFlags.CleanSession)))
-
-    //Wait with the Subscribe to get a "last known good value" eg 6
-    Thread.sleep(5000)
-    val topicFilters: Seq[(String, ControlPacketFlags)] = List((topic, ControlPacketFlags.QoSAtMostOnceDelivery))
-    logger.info(s"Client: $clientId send Subscribe for topic: $topic")
-    sub.commands.offer(Command(Subscribe(topicFilters)))
-  }
-
-
-  private def client(connectionId: String, system: ActorSystem, host: String, port: Int): MqttClient = {
-    implicit val sys = system
-    implicit val ec: ExecutionContextExecutor = system.dispatcher
-
-    logger.info(s"Client: $connectionId starting...")
-
-    val settings = MqttSessionSettings()
-    val clientSession = ActorMqttClientSession(settings)
-
-    val connection = Tcp().outgoingConnection(host, port)
-
-    val mqttFlow =
-      Mqtt
-        .clientSessionFlow(clientSession, ByteString(connectionId))
-        .join(connection)
-
-    val restartSettings = RestartSettings(1.second, 10.seconds, 0.2).withMaxRestarts(10, 1.minute)
-    val restartFlow = RestartFlow.onFailuresWithBackoff(restartSettings)(() => mqttFlow)
-
-    val (commands, done) = {
-      Source
-        .queue(10, OverflowStrategy.backpressure, 10)
-        .via(restartFlow)
-
-        //TODO Process ConnAck/SubAck/PubAck as an indicator on the application level to see if we are still connected
-        //Coordinate via additional ConnectedActor?
-        //Additional hints:
-        //https://github.com/akka/alpakka/issues/1581
-
-        .filter {
-          case Right(Event(_: ConnAck, _)) =>
-            logger.info("Received ConnAck")
-            false
-          case Right(Event(_: SubAck, _)) =>
-            logger.info("Received SubAck")
-            false
-          case Right(Event(p: PubAck, Some(ack))) =>
-            logger.info(s"Received PubAck" + p.packetId)
-            false
-          case _ => true
-        }
-
-
-        //Only the Publish events are interesting for the subscriber
-        .collect { case Right(Event(p: Publish, _)) => p }
-        .wireTap(event => logger.info(s"Client: $connectionId received: ${event.payload.utf8String}"))
-        .toMat(Sink.ignore)(Keep.both)
-        .run()
-    }
-
-
-    //TODO https://discuss.lightbend.com/t/alpakka-mqtt-streaming-client-does-not-complain-when-there-is-no-tcp-connection/7113
-    done.onComplete{
-      case Success(value) => logger.info(s"Flow stopped with: $value. Probably lost tcp connection")
-      case Failure(exception) => logger.error("Error no tcp connection on startup:", exception)
-    }
-
-    //WIP: Due to the async nature of the flow above, we don't know if we are really connected
-    logger.info(s"Client: $connectionId bound to: $host:$port")
-    MqttClient(session = clientSession, commands = commands, done = done)
+  val parseConfig: Try[Config] = Try(Config.loadConfig)
+  // TODO: validate required parameters (i.e. mqtt.host)
+  val config = parseConfig match {
+    case Failure(exception) => logger.info(s"Config is invalid: $exception")
+    case Success(config) =>
+      val actorSystem: ActorSystem = ActorSystem("actor-system")
+      actorSystem.actorOf(Props(new MainActor(config)), "main")
   }
 }
-
-case class MqttClient(session: ActorMqttClientSession, commands: SourceQueueWithComplete[Command[Nothing]], done: Future[Done])
-
-
-
-
-object IrrigationMain extends IOApp {
-  override def run(args: List[String]): IO[ExitCode] = {
-
-
-
-    IO(println(s"Hello, World!")).as(ExitCode.Success)
-  }
-}
-
-
-//object IrrigationMain extends IOApp {
-//
-//  override def run(args: List[String]): IO[ExitCode] = {
-//    for {
-//      shoppingService <- ShoppingCartService.of[IO]
-//      orderService     = OrderService[IO](FileClient[IO])
-//      rootRouter       = RootRouter[IO](
-////        OrderRouter(orderService)
-//        )
-//      consoleInterface = ConsoleInterface[IO](
-//        Console[IO],
-//        rootRouter
-//        )
-//      _             <- consoleInterface.repl
-//    } yield ExitCode.Success
-//  }
-//}
-
-/**
- * - wczytanie konfiguracji z YAML/JSON?
- * - nasłuchiwanie komend na MQTT (subscribe):
- *   - ustawianie trybu pracy (off/auto/one-time)
- *   - uruchomienie całego trybu nawadniania ręcznie (niezależnie od czujników)
- *   - uruchomienie konkretnego elektro-zaworu (strefy)
- *   - nasłuchiwanie na odczyty sensorów i ich przetwarzanie
- * - obsługa harmonogramu i uruchamianie nawadniania w zależności od ustawionego trybu (auto/one-time)
- * - wysyłanie do MQTT:
- *   - włączenie/wyłączenie elektro-zaworu
- */

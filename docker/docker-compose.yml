@@ -1,0 +1,17 @@
+version: "3"
+
+services:
+  mosquitto:
+    image: toke/mosquitto
+#    image: eclipse-mosquitto
+    ports:
+      - 1883:1883
+      - 5001:9001
+
+  # https://hub.docker.com/r/dersimn/mqtt-admin
+  mqtt-admin:
+    image: dersimn/mqtt-admin
+    ports:
+      - 5080:80
+    environment:
+      - MQTT_HOST=localhost:9001

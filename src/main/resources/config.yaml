@@ -1,0 +1,43 @@
+version: '1.0'
+
+general:
+    name: Irrigation
+    id: irrigation1   # no spaces
+
+zones:
+    backyard front:
+        type: sprinklers
+        waterRequirement: 10
+        mqtt: { commandTopic: abc/def, commandOn: 'ON', commandOff: 'OFF' }
+
+    thujas:
+        type: drip-line
+        waterRequirement: 10
+        mqtt: { commandTopic: abc/def, commandOn: 'ON', commandOff: 'OFF' }
+
+waterSupplies:
+    grid:
+        capacity: 'infinite'
+        flow: 20
+        pressure: 6
+
+    rainwaterTank:
+        capacity: '200'
+        flow: 10
+        pressure: 3
+        cmdTopic: 'valve/1'
+
+sensors:
+    soil-moisture-1:
+        type: soil-moisture
+        zones:
+            - backyard front
+        stateTopic: 'sensor/111/xxx'
+
+mqtt:
+    host: 127.0.0.1
+#    host: 192.168.1.11
+    port: 1883
+#    username: domoticz
+#    password: xxx
+#    discoveryTopicPrefix: homeassistant
