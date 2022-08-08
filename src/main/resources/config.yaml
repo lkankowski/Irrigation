@@ -13,19 +13,19 @@ zones:
         type: sprinklers
         mode: Auto
         waterRequirement: 10
-        mqtt: { commandTopic: 'abc/def', commandOn: 'ON', commandOff: 'OFF' }
+        valveMqtt: { commandTopic: 'abc/def', commandOn: 'ON', commandOff: 'OFF' }
 
     garden:
         type: sprinklers
         mode: Auto
         waterRequirement: 10
-        mqtt: { commandTopic: 'abc/def', commandOn: 'ON', commandOff: 'OFF' }
+        valveMqtt: { commandTopic: 'abc/def', commandOn: 'ON', commandOff: 'OFF' }
 
     thujas:
         type: drip-line
         mode: Auto
         waterRequirement: 10
-        mqtt: { commandTopic: 'abc/def', commandOn: 'ON', commandOff: 'OFF' }
+        valveMqtt: { commandTopic: 'abc/def', commandOn: 'ON', commandOff: 'OFF' }
 
 waterSupplies:
     grid:

@@ -8,6 +8,7 @@ final class MqttActor(config: Config) extends Actor {
 
   val logger = Logging(context.system, this)
   implicit val system: ActorSystem = context.system
+  private val useRetainForDiscovery = false
 
   logger.info(s"${MqttActor.Name}: starting")
 
@@ -16,15 +17,70 @@ final class MqttActor(config: Config) extends Actor {
   mqtt.subscribeToCommandTopic(mqttDiscovery.getCommandTopicPrefix, processCommand)
 
   override def receive: Receive = {
-    case PublishDiscoveryMessages           => mqtt.sendDiscoveryMessages()
-    case PublishIrrigationMode(payload)     => mqtt.publishIrrigationMode(payload)
-    case PublishIrrigationInterval(payload) => mqtt.publishIrrigationInterval(payload)
-    case PublishAllState(zonesState)        => mqtt.publishAllSwitchState(zonesState)
-    case PublishState(id, state)            => mqtt.publishSwitchState(id, state)
-    case PublishAllMode(zonesMode)          => mqtt.publishAllZoneMode(zonesMode)
-    case PublishMode(id, mode)              => mqtt.publishZoneMode(id, mode)
+    case PublishDiscoveryMessages           =>
+      sendDiscoveryMessages()
+
+    case PublishIrrigationMode(payload)     =>
+      mqtt.sendCommand(mqttDiscovery.getStateTopic("mode"), s"{ \"mode\": \"${payload}\" }")
+
+    case PublishIrrigationInterval(payload) =>
+      mqtt.sendCommand(mqttDiscovery.getStateTopic("interval"), s"{ \"mode\": \"${payload}\" }")
+
+    case PublishAllState(zonesState)        =>
+      mqtt.sendCommands(zonesState.toSeq.map { case (zoneId, payload) => (
+        mqttDiscovery.getStateTopic(s"zoneState_${zoneId}"),
+        s"{ \"state\": \"${payload}\" }",
+        false
+      )})
+
+    case PublishState(id, state)            =>
+      mqtt.sendCommand(mqttDiscovery.getStateTopic(s"zoneState_${id}"), s"{ \"state\": \"${state}\" }")
+
+    case PublishAllMode(zonesMode)          =>
+      mqtt.sendCommands(zonesMode.toSeq.map { case (zoneId, mode) => (
+        mqttDiscovery.getStateTopic(s"zoneMode_${zoneId}"),
+        s"{ \"mode\": \"${mode}\" }",
+        false
+      )})
+
+    case PublishMode(id, mode)              =>
+      mqtt.sendCommand(mqttDiscovery.getStateTopic(s"zoneMode_${id}"), s"{ \"mode\": \"${mode}\" }")
+
+    case SendCommand(topic, payload)        => mqtt.sendCommand(topic, payload)
   }
 
+  private def sendDiscoveryMessages(): Unit = {
+    val createIrrigationModeDiscoveryMessages = Seq(
+      (mqttDiscovery.getDiscoveryTopic("select", s"mode"),
+        mqttDiscovery.createSelectMessage("Irrigation mode", "mode", MainActor.IrrigationMode.list),
+        useRetainForDiscovery)
+      )
+    val createIrrigationIntervalDiscoveryMessages = Seq(
+      (mqttDiscovery.getDiscoveryTopic("select", s"interval"),
+        mqttDiscovery.createSelectMessage("Irrigation interval", "interval", MainActor.IrrigationInterval.list),
+        useRetainForDiscovery)
+      )
+    val createZoneModeDiscoveryMessages = config.zones.map { case (zoneId, zone) =>
+      (mqttDiscovery.getDiscoveryTopic("select", s"zoneMode_${zoneId.id}"),
+        mqttDiscovery.createSelectMessage(s"Zone '${zoneId.id}' mode", s"zoneMode_${zoneId.id}", ZonesActor.ZoneMode.list),
+        useRetainForDiscovery)
+    }.toSeq
+    val createZoneStateDiscoveryMessages = config.zones.map { case (zoneId, zone) =>
+      (mqttDiscovery.getDiscoveryTopic("switch", s"zoneState_${zoneId.id}"),
+        mqttDiscovery.createSwitchMessage(s"Zone '${zoneId.id}' state", s"zoneState_${zoneId.id}"),
+        useRetainForDiscovery)
+    }.toSeq
+    val createLwtMessage = Seq((mqttDiscovery.getLWT, "Online", true))
+
+    val messages = Seq.concat[(String, String, Boolean)](
+      createIrrigationModeDiscoveryMessages,
+      createIrrigationIntervalDiscoveryMessages,
+      createZoneModeDiscoveryMessages,
+      createZoneStateDiscoveryMessages,
+      createLwtMessage)
+
+    mqtt.sendCommands(messages)
+  }
   def processCommand(topic: String, commandString: String): Unit = {
     import cats.syntax.functor._
     import io.circe.Decoder
@@ -89,4 +145,5 @@ object MqttActor {
   final case class PublishState(id: String, state: String) extends In
   final case class PublishAllMode(zonesState: Map[String, String]) extends In
   final case class PublishMode(id: String, state: String) extends In
+  final case class SendCommand(topic: String, commandPayload: String) extends In
 }

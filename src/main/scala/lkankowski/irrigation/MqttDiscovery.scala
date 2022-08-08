@@ -1,14 +1,12 @@
 package lkankowski.irrigation
 
-import akka.util.ByteString
-
 trait MqttDiscovery {
   def getCommandTopicPrefix: String
   def getStateTopic(suffix: String): String
   def getLWT: String
   def getDiscoveryTopic(deviceType: String, suffix: String): String
-  def createSelectMessage(name: String, id: String, options: List[String]): ByteString
-  def createSwitchMessage(name: String, suffix: String): ByteString
+  def createSelectMessage(name: String, id: String, options: List[String]): String
+  def createSwitchMessage(name: String, suffix: String): String
 }
 
 object MqttDiscovery {
@@ -24,7 +22,7 @@ object MqttDiscovery {
     def getDiscoveryTopic(deviceType: String, suffix: String): String =
       s"${discoveryPrefix.getOrElse("homeassistant")}/${deviceType}/${generalId}_${suffix}/config"
 
-    def createSelectMessage(name: String, prefix: String, options: List[String]): ByteString = {
+    def createSelectMessage(name: String, prefix: String, options: List[String]): String = {
       createSelectDiscoveryMessageFactory(
         id = prefix,
         name = name,
@@ -34,7 +32,7 @@ object MqttDiscovery {
       )
     }
 
-    def createSwitchMessage(name: String, suffix: String): ByteString = {
+    def createSwitchMessage(name: String, suffix: String): String = {
       createSwitchDiscoveryMessageFactory(
         id = suffix,
         name = name,
@@ -55,11 +53,11 @@ object MqttDiscovery {
       payload_available: String = "Online",
       payload_not_available: String = "Offline",
       device: Option[Device] = None,
-    ): ByteString = {
+    ): String = {
       import io.circe.generic.auto._
       import io.circe.syntax.EncoderOps
 
-      ByteString(MqttSelectDiscoveryMessage(
+      MqttSelectDiscoveryMessage(
         name = name,
         command_topic = command_topic,
         state_topic = state_topic,
@@ -70,7 +68,7 @@ object MqttDiscovery {
         payload_available = payload_available,
         payload_not_available = payload_not_available,
         device = device.getOrElse(Device(List(generalId)))
-        ).asJson.noSpaces)
+        ).asJson.noSpaces
     }
 
     def createSwitchDiscoveryMessageFactory(
@@ -86,11 +84,11 @@ object MqttDiscovery {
       payload_available: String = "Online",
       payload_not_available: String = "Offline",
       device: Option[Device] = None,
-    ): ByteString = {
+    ): String = {
       import io.circe.generic.auto._
       import io.circe.syntax.EncoderOps
 
-      ByteString(MqttSwitchDiscoveryMessage(
+      MqttSwitchDiscoveryMessage(
         name = name,
         command_topic = command_topic,
         state_topic = state_topic,
@@ -102,7 +100,7 @@ object MqttDiscovery {
         payload_available = payload_available,
         payload_not_available = payload_not_available,
         device = device.getOrElse(Device(List(generalId)))
-        ).asJson.noSpaces)
+        ).asJson.noSpaces
     }
   }
 }

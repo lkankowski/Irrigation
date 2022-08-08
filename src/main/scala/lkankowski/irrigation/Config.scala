@@ -19,7 +19,7 @@ case class Config(
   mqtt: MqttParams,
 )
 case class General(name: String, id: String)
-case class Zone(`type`: String, mode: Option[ZoneMode], waterRequirement: Float, mqtt: Option[MqttCommand])
+case class Zone(`type`: String, mode: Option[ZoneMode], waterRequirement: Float, valveMqtt: Option[MqttCommand])
 case class WaterSupply(capacity: String, flow: Float, pressure: Float, cmdTopic: Option[String])
 case class Sensor(`type`: String, zones: List[String], stateTopic: String)
 case class MqttParams(

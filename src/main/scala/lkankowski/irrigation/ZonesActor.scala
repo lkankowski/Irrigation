@@ -25,8 +25,15 @@ final class ZonesActor(config: Config, mqttActor: ActorRef) extends Actor {
 
     case SetZoneState(id, payload) =>
       val state = ZoneState(payload)
-      zonesState(ZoneId(id)) = state
+      val zoneId = ZoneId(id)
+      zonesState(zoneId) = state
       mqttActor ! MqttActor.PublishState(id, state.payload)
+      config.zones(zoneId).valveMqtt.foreach {
+        case MqttCommand(topic, payloadOn, payloadOff) =>
+          val commandPayload = if (state.isOn) payloadOn.getOrElse(MqttDiscovery.payloadOn) else payloadOff.getOrElse(MqttDiscovery.payloadOff)
+          mqttActor ! MqttActor.SendCommand(topic, commandPayload)
+      }
+
 
     case PublishAllZoneMode =>
       mqttActor ! MqttActor.PublishAllMode(zonesMode.map { case (zoneId, zoneMode) => (zoneId.id, zoneMode.payload) }.toMap)
@@ -47,9 +54,9 @@ object ZonesActor {
   final case class SetZoneState(id: String, payload: String) extends In
   final case class SetZoneMode(id: String, payload: String) extends In
 
-  sealed abstract class ZoneState(val isOn: Boolean, val payload: String)
-  case object ZoneOn extends ZoneState(true, ZoneState.PayloadOn)
-  case object ZoneOff extends ZoneState(false, ZoneState.PayloadOff)
+  sealed abstract class ZoneState(val payload: String, val isOn: Boolean)
+  case object ZoneOn extends ZoneState(ZoneState.PayloadOn, true)
+  case object ZoneOff extends ZoneState(ZoneState.PayloadOff, false)
   object ZoneState {
     val PayloadOn = MqttDiscovery.payloadOn
     val PayloadOff = MqttDiscovery.payloadOff

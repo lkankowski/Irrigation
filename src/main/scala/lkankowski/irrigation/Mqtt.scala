@@ -10,16 +10,12 @@ import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence
 import org.slf4j.{Logger, LoggerFactory}
 
 import scala.concurrent.Future
+import scala.util.Random
 
 trait Mqtt {
   def subscribeToCommandTopic(commandTopicPrefix: String, fn: (String, String) => Unit): Unit
-  def sendDiscoveryMessages(): Unit
-  def publishIrrigationMode(payload: String): Unit
-  def publishIrrigationInterval(payload: String): Unit
-  def publishAllSwitchState(states: Map[String, String]): Unit
-  def publishSwitchState(id: String, state: String): Unit
-  def publishAllZoneMode(states: Map[String, String]): Unit
-  def publishZoneMode(id: String, state: String): Unit
+  def sendCommands(messages: Seq[(String, String, Boolean)]): Unit
+  def sendCommand(topic: String, payload: String, retain: Boolean = false): Unit
 }
 
 object Mqtt {
@@ -66,92 +62,20 @@ object Mqtt {
       streamCompletion.recover { case ex => logger.error(s"Sub stream failed with: ${ex.getCause}") }
     }
 
-    def sendDiscoveryMessages(): Unit = {
-      val createIrrigationModeDiscoveryMessages = Seq(
-        MqttMessage(mqttDiscovery.getDiscoveryTopic("select", s"mode"),
-                    mqttDiscovery.createSelectMessage("Irrigation mode", "mode", MainActor.IrrigationMode.list))
-          .withQos(MqttQoS.atLeastOnce)
-        //          .withRetained(true) // for development
-      )
-      val createIrrigationIntervalDiscoveryMessages = Seq(
-        MqttMessage(mqttDiscovery.getDiscoveryTopic("select", s"interval"),
-                    mqttDiscovery.createSelectMessage("Irrigation interval", "interval", MainActor.IrrigationInterval.list))
-          .withQos(MqttQoS.atLeastOnce)
-        //          .withRetained(true) // for development
-      )
-      val createZoneModeDiscoveryMessages = config.zones.map { case (zoneId, zone) =>
-        MqttMessage(mqttDiscovery.getDiscoveryTopic("select", s"zoneMode_${zoneId.id}"),
-                    mqttDiscovery.createSelectMessage(s"Zone '${zoneId.id}' mode", s"zoneMode_${zoneId.id}", ZonesActor.ZoneMode.list))
-          .withQos(MqttQoS.atLeastOnce)
-        //          .withRetained(true) // for development
-      }.toSeq
-      val createZoneStateDiscoveryMessages = config.zones.map { case (zoneId, zone) =>
-        MqttMessage(mqttDiscovery.getDiscoveryTopic("switch", s"zoneState_${zoneId.id}"),
-                    mqttDiscovery.createSwitchMessage(s"Zone '${zoneId.id}' state", s"zoneState_${zoneId.id}"))
-          .withQos(MqttQoS.atLeastOnce)
-        //          .withRetained(true) // for development
-      }.toSeq
-      val createLwtMessage = MqttMessage(mqttDiscovery.getLWT, ByteString("Online"))
-        .withQos(MqttQoS.atLeastOnce)
-        .withRetained(true)
-
-      val messages =
-        createIrrigationModeDiscoveryMessages ++
-        createIrrigationIntervalDiscoveryMessages ++
-        createZoneModeDiscoveryMessages ++
-        createZoneStateDiscoveryMessages ++
-        Seq(createLwtMessage)
-      val sink = MqttSink(connectionSettings.withClientId(s"Pub Startup: $clientId"), MqttQoS.AtLeastOnce)
-
-      Source(messages).runWith(sink)
+    def sendCommands(messages: Seq[(String, String, Boolean)]): Unit = {
+      //TODO: get rid of random - use persistent connection and some queue
+      val random = Random.alphanumeric.take(31).mkString
+      Source(messages.map {
+        case (topic, payload, retain) =>
+          MqttMessage(topic, ByteString(payload))
+            .withQos(MqttQoS.atLeastOnce)
+            .withRetained(retain)
+      })
+        .runWith(MqttSink(connectionSettings.withClientId(s"sendCommand: $clientId-$random"), MqttQoS.AtLeastOnce))
     }
 
-    def publishIrrigationMode(payload: String): Unit = {
-      val messages = Seq(
-        MqttMessage(mqttDiscovery.getStateTopic("mode"), ByteString(s"{ \"mode\": \"${payload}\" }"))
-          .withQos(MqttQoS.atLeastOnce)
-        )
-      Source(messages).runWith(MqttSink(connectionSettings.withClientId(s"publishIrrigationMode: $clientId"), MqttQoS.AtLeastOnce))
-    }
-
-    def publishIrrigationInterval(payload: String): Unit = {
-      val messages = Seq(
-        MqttMessage(mqttDiscovery.getStateTopic("interval"), ByteString(s"{ \"mode\": \"${payload}\" }"))
-          .withQos(MqttQoS.atLeastOnce)
-        )
-      Source(messages).runWith(MqttSink(connectionSettings.withClientId(s"publishIrrigationInterval: $clientId"), MqttQoS.AtLeastOnce))
-    }
-
-    def publishAllSwitchState(states: Map[String, String]): Unit = {
-      val messages = states.map { case (zoneId, payload) =>
-        MqttMessage(mqttDiscovery.getStateTopic(s"zoneState_${zoneId}"), ByteString(s"{ \"state\": \"${payload}\" }"))
-          .withQos(MqttQoS.atLeastOnce)
-      }
-      Source(messages).runWith(MqttSink(connectionSettings.withClientId(s"publishAllSwitchState: $clientId"), MqttQoS.AtLeastOnce))
-    }
-
-    def publishSwitchState(id: String, payload: String): Unit = {
-      val messages = Seq(
-        MqttMessage(mqttDiscovery.getStateTopic(s"zoneState_${id}"), ByteString(s"{ \"state\": \"${payload}\" }"))
-          .withQos(MqttQoS.atLeastOnce)
-        )
-      Source(messages).runWith(MqttSink(connectionSettings.withClientId(s"publishSwitchState: $clientId"), MqttQoS.AtLeastOnce))
-    }
-
-    def publishAllZoneMode(states: Map[String, String]): Unit = {
-      val messages = states.map { case (zoneId, mode) =>
-        MqttMessage(mqttDiscovery.getStateTopic(s"zoneMode_${zoneId}"), ByteString(s"{ \"mode\": \"${mode}\" }"))
-          .withQos(MqttQoS.atLeastOnce)
-      }
-      Source(messages).runWith(MqttSink(connectionSettings.withClientId(s"publishAllZoneMode: $clientId"), MqttQoS.AtLeastOnce))
-    }
-
-    def publishZoneMode(id: String, mode: String): Unit = {
-      val messages = Seq(
-        MqttMessage(mqttDiscovery.getStateTopic(s"zoneMode_${id}"), ByteString(s"{ \"mode\": \"${mode}\" }"))
-          .withQos(MqttQoS.atLeastOnce)
-        )
-      Source(messages).runWith(MqttSink(connectionSettings.withClientId(s"publishZoneMode: $clientId"), MqttQoS.AtLeastOnce))
+    def sendCommand(topic: String, payload: String, retain: Boolean = false): Unit = {
+      sendCommands(Seq((topic, payload, retain)))
     }
   }
 }
