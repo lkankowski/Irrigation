@@ -1,17 +1,29 @@
-version: "3"
+
+name: Irrigation
 
 services:
   mosquitto:
     image: toke/mosquitto
 #    image: eclipse-mosquitto
     ports:
-      - 1883:1883
-      - 5001:9001
+      - '1883:1883'
+      - '5001:9001'
+
+  domoticz:
+    image: domoticz/domoticz:2022.1
+    environment:
+      - TZ=Europe/Warsaw
+    volumes:
+      - ./domoticz:/opt/domoticz/userdata
+    ports:
+      - '8080:8080'
+      - '8443:443'
+
 
   # https://hub.docker.com/r/dersimn/mqtt-admin
-  mqtt-admin:
-    image: dersimn/mqtt-admin
-    ports:
-      - 5080:80
-    environment:
-      - MQTT_HOST=localhost:9001
+#  mqtt-admin:
+#    image: dersimn/mqtt-admin
+#    ports:
+#      - 5080:80
+#    environment:
+#      - MQTT_HOST=localhost:9001

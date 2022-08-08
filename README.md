@@ -22,6 +22,10 @@ mosquitto_sub -h 127.0.0.1 -p 1883 -t '#' -v
 ```shell
 mosquitto_pub -h 127.0.0.1 -p 1883 -t 'cmnd/irrigation1/MODE' -m 'ON'
 ```
+Clear retained message:
+```shell
+mosquitto_pub -h 127.0.0.1 -p 1883 -t 'homeassistant/select/irrigation1_zone_thujas/config' -n -r
+```
 * Temporary exit command:
 ```shell
 mosquitto_pub -h 127.0.0.1 -p 1883 -t 'cmnd/irrigation1/MODE' -m 'exit'

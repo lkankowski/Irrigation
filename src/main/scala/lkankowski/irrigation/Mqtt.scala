@@ -6,168 +6,152 @@ import akka.stream.alpakka.mqtt.scaladsl.{MqttSink, MqttSource}
 import akka.stream.scaladsl._
 import akka.util.ByteString
 import akka.Done
-import lkankowski.irrigation.IrrigationMain.MainActor
 import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence
 import org.slf4j.{Logger, LoggerFactory}
 
 import scala.concurrent.Future
 
 trait Mqtt {
-  def initialize(discoveryTopicPrefix: Option[String], name: String): Unit
-  def publishMode(mode: Int): Unit
+  def subscribeToCommandTopic(commandTopicPrefix: String, fn: (String, String) => Unit): Unit
+  def sendDiscoveryMessages(): Unit
+  def publishIrrigationMode(payload: String): Unit
+  def publishIrrigationInterval(payload: String): Unit
+  def publishAllSwitchState(states: Map[String, String]): Unit
+  def publishSwitchState(id: String, state: String): Unit
+  def publishAllZoneMode(states: Map[String, String]): Unit
+  def publishZoneMode(id: String, state: String): Unit
 }
 
 object Mqtt {
-  def apply(host: String, port: Int, username: Option[String], password: Option[String], id: String)(implicit context: ActorContext): Mqtt = new Mqtt {
+  def apply(config: Config, mqttDiscovery: MqttDiscovery)(implicit context: ActorContext): Mqtt = new Mqtt {
 
-    val logger: Logger = LoggerFactory.getLogger(this.getClass)
-    implicit val system: ActorSystem = context.system
+    private val logger: Logger = LoggerFactory.getLogger(this.getClass)
+    private implicit val system: ActorSystem = context.system
     import system.dispatcher
 
-    val clientId = s"$id-Client-cmd"
+    private val clientId = s"${config.general.id}-Client-cmd"
 
-    val lastWill: MqttMessage = MqttMessage(getLWT, ByteString("Offline"))
+    private val lastWill: MqttMessage = MqttMessage(mqttDiscovery.getLWT, ByteString("Offline"))
       .withQos(MqttQoS.atLeastOnce)
       .withRetained(true)
 
-    val connectionSettings: MqttConnectionSettings =
-      MqttConnectionSettings(s"tcp://${host}:${port}", "N/A", new MemoryPersistence)
-        .withAuth(username.getOrElse(""), password.getOrElse(""))
+    private val connectionSettings: MqttConnectionSettings =
+      MqttConnectionSettings(s"tcp://${config.mqtt.host}:${config.mqtt.port}", "N/A", new MemoryPersistence)
+        .withAuth(config.mqtt.username.getOrElse(""), config.mqtt.password.getOrElse(""))
         .withAutomaticReconnect(true)
         .withWill(lastWill)
 
-    def initialize(discoveryTopicPrefix: Option[String], name: String): Unit = {
+    def subscribeToCommandTopic(commandTopicPrefix: String, commandCallback: (String, String) => Unit): Unit = {
+      val subscriptions = Map(commandTopicPrefix + "/+" -> MqttQoS.atLeastOnce)  // multiple topics => MqttSubscriptions(Map(topic -> Qos))
 
       val source: Source[MqttMessage, Future[Done]] = MqttSource.atMostOnce(
         connectionSettings.withClientId(s"Sub: $clientId"),
-        MqttSubscriptions(getModeCommandTopic, MqttQoS.atLeastOnce),
+        MqttSubscriptions(subscriptions),
         8
       )
 
       val (subscribed, streamCompletion) = source
         .wireTap(each => {
           logger.info(s"Sub: $clientId received payload: ${each.payload.utf8String}")
-          processCommand(each.payload.utf8String)
+          commandCallback(each.topic, each.payload.utf8String)
         })
         //.via()
         .toMat(Sink.ignore)(Keep.both)
         .run()
 
-      subscribed.onComplete(each => logger.info(s"Sub: $clientId subscribed: $each"))
+      subscribed.onComplete {each =>
+        logger.info(s"Sub: $clientId subscribed: $each")
+        context.parent ! MainActor.InitialisationComplete
+      }
       streamCompletion.recover { case ex => logger.error(s"Sub stream failed with: ${ex.getCause}") }
+    }
 
-      val messages = Seq(
-        MqttMessage(getDiscoveryTopic(discoveryTopicPrefix.getOrElse("homeassistant")), getDiscoveryMessage(name, id))
+    def sendDiscoveryMessages(): Unit = {
+      val createIrrigationModeDiscoveryMessages = Seq(
+        MqttMessage(mqttDiscovery.getDiscoveryTopic("select", s"mode"),
+                    mqttDiscovery.createSelectMessage("Irrigation mode", "mode", MainActor.IrrigationMode.list))
           .withQos(MqttQoS.atLeastOnce)
-          .withRetained(true),
-        MqttMessage(getLWT, ByteString("Online"))
-          .withQos(MqttQoS.atLeastOnce)
-          .withRetained(true)
+        //          .withRetained(true) // for development
       )
+      val createIrrigationIntervalDiscoveryMessages = Seq(
+        MqttMessage(mqttDiscovery.getDiscoveryTopic("select", s"interval"),
+                    mqttDiscovery.createSelectMessage("Irrigation interval", "interval", MainActor.IrrigationInterval.list))
+          .withQos(MqttQoS.atLeastOnce)
+        //          .withRetained(true) // for development
+      )
+      val createZoneModeDiscoveryMessages = config.zones.map { case (zoneId, zone) =>
+        MqttMessage(mqttDiscovery.getDiscoveryTopic("select", s"zoneMode_${zoneId.id}"),
+                    mqttDiscovery.createSelectMessage(s"Zone '${zoneId.id}' mode", s"zoneMode_${zoneId.id}", ZonesActor.ZoneMode.list))
+          .withQos(MqttQoS.atLeastOnce)
+        //          .withRetained(true) // for development
+      }.toSeq
+      val createZoneStateDiscoveryMessages = config.zones.map { case (zoneId, zone) =>
+        MqttMessage(mqttDiscovery.getDiscoveryTopic("switch", s"zoneState_${zoneId.id}"),
+                    mqttDiscovery.createSwitchMessage(s"Zone '${zoneId.id}' state", s"zoneState_${zoneId.id}"))
+          .withQos(MqttQoS.atLeastOnce)
+        //          .withRetained(true) // for development
+      }.toSeq
+      val createLwtMessage = MqttMessage(mqttDiscovery.getLWT, ByteString("Online"))
+        .withQos(MqttQoS.atLeastOnce)
+        .withRetained(true)
+
+      val messages =
+        createIrrigationModeDiscoveryMessages ++
+        createIrrigationIntervalDiscoveryMessages ++
+        createZoneModeDiscoveryMessages ++
+        createZoneStateDiscoveryMessages ++
+        Seq(createLwtMessage)
       val sink = MqttSink(connectionSettings.withClientId(s"Pub Startup: $clientId"), MqttQoS.AtLeastOnce)
 
       Source(messages).runWith(sink)
     }
 
-    def processCommand(commandString: String): Unit = {
-      import cats.syntax.functor._
-      import io.circe.Decoder
-      import io.circe.generic.semiauto._
-      import io.circe.parser._
+    def publishIrrigationMode(payload: String): Unit = {
+      val messages = Seq(
+        MqttMessage(mqttDiscovery.getStateTopic("mode"), ByteString(s"{ \"mode\": \"${payload}\" }"))
+          .withQos(MqttQoS.atLeastOnce)
+        )
+      Source(messages).runWith(MqttSink(connectionSettings.withClientId(s"publishIrrigationMode: $clientId"), MqttQoS.AtLeastOnce))
+    }
 
-      implicit val testDecoder   : Decoder[Test] = deriveDecoder[Test]
-      implicit val commandDecoder: Decoder[Command] = List[Decoder[Command]](testDecoder.widen).reduceLeft(_ or _)
+    def publishIrrigationInterval(payload: String): Unit = {
+      val messages = Seq(
+        MqttMessage(mqttDiscovery.getStateTopic("interval"), ByteString(s"{ \"mode\": \"${payload}\" }"))
+          .withQos(MqttQoS.atLeastOnce)
+        )
+      Source(messages).runWith(MqttSink(connectionSettings.withClientId(s"publishIrrigationInterval: $clientId"), MqttQoS.AtLeastOnce))
+    }
 
-      logger.info(s"MQTT command topic received: $commandString")
-
-      parse(commandString) match {
-        case Left(_) =>
-          commandString match {
-            case Command.Exit     => context.parent ! MainActor.Exit
-            case Command.ModeOff  => context.parent ! MainActor.ModeOff
-            case Command.ModeAuto => context.parent ! MainActor.ModeAuto
-            case Command.ModeOneTime => context.parent ! MainActor.ModeOneTime
-          }
-        case Right(json) =>
-          json.as[Command] match {
-            case Left(_) => logger.info(s"JSON command decode failure!: ${json.noSpaces}")
-            case Right(command) =>
-              command match {
-                case Test(test) => logger.info(s"Command Test: $test")
-              }
-          }
+    def publishAllSwitchState(states: Map[String, String]): Unit = {
+      val messages = states.map { case (zoneId, payload) =>
+        MqttMessage(mqttDiscovery.getStateTopic(s"zoneState_${zoneId}"), ByteString(s"{ \"state\": \"${payload}\" }"))
+          .withQos(MqttQoS.atLeastOnce)
       }
+      Source(messages).runWith(MqttSink(connectionSettings.withClientId(s"publishAllSwitchState: $clientId"), MqttQoS.AtLeastOnce))
     }
 
-    def publishMode(mode: Int): Unit = {
-      val messages = Seq(MqttMessage(getModeStatusTopic, ByteString(mode.toString)))
-      val sink = MqttSink(connectionSettings.withClientId(s"Pub status: $clientId"), MqttQoS.AtLeastOnce)
-
-      Source(messages).runWith(sink)
+    def publishSwitchState(id: String, payload: String): Unit = {
+      val messages = Seq(
+        MqttMessage(mqttDiscovery.getStateTopic(s"zoneState_${id}"), ByteString(s"{ \"state\": \"${payload}\" }"))
+          .withQos(MqttQoS.atLeastOnce)
+        )
+      Source(messages).runWith(MqttSink(connectionSettings.withClientId(s"publishSwitchState: $clientId"), MqttQoS.AtLeastOnce))
     }
 
-
-    private def getDiscoveryTopic(prefix: String): String = s"${prefix}/select/${id}/config"
-
-    private def getDiscoveryMessage(name: String, id: String): ByteString = {
-      import io.circe.generic.auto._
-      import io.circe.syntax.EncoderOps
-
-      ByteString(MqttSelectDiscoveryMessage(
-        name,
-        getModeCommandTopic,
-        getModeStatusTopic,
-        List(Command.ModeOff, Command.ModeAuto, Command.ModeOneTime),
-        "{{value_json.MODE}}",
-        id,
-        getLWT,
-        "Online",
-        "Offline",
-        Device(List(id))
-        ).asJson.noSpaces)
+    def publishAllZoneMode(states: Map[String, String]): Unit = {
+      val messages = states.map { case (zoneId, mode) =>
+        MqttMessage(mqttDiscovery.getStateTopic(s"zoneMode_${zoneId}"), ByteString(s"{ \"mode\": \"${mode}\" }"))
+          .withQos(MqttQoS.atLeastOnce)
+      }
+      Source(messages).runWith(MqttSink(connectionSettings.withClientId(s"publishAllZoneMode: $clientId"), MqttQoS.AtLeastOnce))
     }
 
-    private def getLWT = s"tele/${id}/LWT"
-    private def getModeCommandTopic = s"cmnd/${id}/MODE"
-    private def getModeStatusTopic = s"tele/${id}/MODE"
-  }
-
-
-  case class MqttSwitchDiscoveryMessage(
-    name: String,
-    command_topic: String,
-    state_topic: String,
-    payload_on: String,
-    payload_off: String,
-    value_template: String,
-    unique_id: String,
-    availability_topic: String,
-    payload_available: String,
-    payload_not_available: String,
-    device: Device,
-  )
-
-  case class MqttSelectDiscoveryMessage(
-    name: String,
-    command_topic: String,
-    state_topic: String,
-    options: List[String],
-    value_template: String,
-    unique_id: String,
-    availability_topic: String,
-    payload_available: String,
-    payload_not_available: String,
-    device: Device,
-  )
-
-  case class Device(identifiers: List[String])
-
-  sealed trait Command
-  final case class Test(test: String) extends Command
-  object Command {
-    val Exit = "exit"
-    val ModeOff = "Off"
-    val ModeAuto = "Auto"
-    val ModeOneTime = "One Time"
+    def publishZoneMode(id: String, mode: String): Unit = {
+      val messages = Seq(
+        MqttMessage(mqttDiscovery.getStateTopic(s"zoneMode_${id}"), ByteString(s"{ \"mode\": \"${mode}\" }"))
+          .withQos(MqttQoS.atLeastOnce)
+        )
+      Source(messages).runWith(MqttSink(connectionSettings.withClientId(s"publishZoneMode: $clientId"), MqttQoS.AtLeastOnce))
+    }
   }
 }

@@ -4,16 +4,28 @@ general:
     name: Irrigation
     id: irrigation1   # no spaces
 
+scheduler:
+    - '21:00'
+    - '05:00'
+
 zones:
-    backyard front:
+    backyard-front:
         type: sprinklers
+        mode: Auto
         waterRequirement: 10
-        mqtt: { commandTopic: abc/def, commandOn: 'ON', commandOff: 'OFF' }
+        mqtt: { commandTopic: 'abc/def', commandOn: 'ON', commandOff: 'OFF' }
+
+    garden:
+        type: sprinklers
+        mode: Auto
+        waterRequirement: 10
+        mqtt: { commandTopic: 'abc/def', commandOn: 'ON', commandOff: 'OFF' }
 
     thujas:
         type: drip-line
+        mode: Auto
         waterRequirement: 10
-        mqtt: { commandTopic: abc/def, commandOn: 'ON', commandOff: 'OFF' }
+        mqtt: { commandTopic: 'abc/def', commandOn: 'ON', commandOff: 'OFF' }
 
 waterSupplies:
     grid:
