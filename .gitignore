@@ -2,3 +2,6 @@
 /target/
 /project/project/target/
 /.idea/
+
+docker/domoticz/domoticz.db-shm
+docker/domoticz/domoticz.db-wal
