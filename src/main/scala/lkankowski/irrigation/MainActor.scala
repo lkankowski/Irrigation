@@ -11,7 +11,8 @@ final class MainActor(config: Config) extends Actor {
   import MainActor._
 
   private val mqttRef: ActorRef = context.actorOf(Props(new MqttActor(config)), MqttActor.Name)
-  private val zonesRef: ActorRef = context.actorOf(Props(new ZonesActor(config, mqttRef)), ZonesActor.Name)
+  private val schedulerRef: ActorRef = context.actorOf(Props(new SchedulerActor(config.scheduler, config.general.timeZone)), SchedulerActor.Name)
+  private val zonesRef: ActorRef = context.actorOf(Props(new ZonesActor(config, mqttRef, schedulerRef)), ZonesActor.Name)
   implicit val executionContext: ExecutionContext = context.system.getDispatcher
   val logger = Logging(context.system, this)
 
@@ -27,20 +28,25 @@ final class MainActor(config: Config) extends Actor {
       logger.info(s"MainActor: SetMode($payload)")
       currentMode = IrrigationMode(payload)
       mqttRef ! MqttActor.PublishIrrigationMode(currentMode.payload)
+
     case SetInterval(payload)      =>
       logger.info(s"MainActor: SetInterval($payload)")
       currentInterval = IrrigationInterval(payload)
       mqttRef ! MqttActor.PublishIrrigationInterval(currentInterval.getPayload)
+
     case SetZoneState(id, payload) =>
       logger.info(s"MainActor: SetZoneState($id, $payload)")
       zonesRef ! ZonesActor.SetZoneState(id, payload)
+
     case SetZoneMode(id, payload)  =>
       logger.info(s"MainActor: SetZoneMode($id, $payload)")
       zonesRef ! ZonesActor.SetZoneMode(id, payload)
+
     case Exit                      =>
       mqttRef ! PoisonPill
       context.stop(self)
       context.system.terminate()
+
     case InitialisationComplete    =>
       logger.info("MainActor: InitialisationComplete")
       mqttRef ! MqttActor.PublishDiscoveryMessages
@@ -51,6 +57,12 @@ final class MainActor(config: Config) extends Actor {
         zonesRef ! ZonesActor.PublishAllState
         zonesRef ! ZonesActor.PublishAllZoneMode
       }
+
+    case IrrigationScheduleOccurred =>
+      println("MainActor: IrrigationScheduleOccurred")
+//      if (currentMode != IrrigationModeOff) {
+//        zonesRef !
+//      }
   }
 }
 
@@ -62,6 +74,7 @@ object MainActor {
   final case class SetZoneState(id: String, payload: String) extends In
   final case class SetZoneMode(id: String, payload: String) extends In
   case object InitialisationComplete extends In
+  case object IrrigationScheduleOccurred extends In
 
   sealed abstract class IrrigationMode(val payload: String)
   case object IrrigationModeOff extends IrrigationMode(IrrigationMode.Off)

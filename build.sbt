@@ -39,6 +39,7 @@ libraryDependencies ++= Seq(
   "com.typesafe.akka" %% "akka-actor" % akkaVersion,
   "com.typesafe.akka" %% "akka-actor-typed" % akkaVersion,
   "com.typesafe.akka" %% "akka-slf4j" % akkaVersion,
+  "com.enragedginger" %% "akka-quartz-scheduler" % "1.8.5-akka-2.6.x",
   "org.slf4j" % "slf4j-simple" % "1.7.36",
 
   //  "com.typesafe.akka" %% "akka-http" % akkaHTTPVersion,

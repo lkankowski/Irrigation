@@ -18,7 +18,7 @@ case class Config(
   sensors: Map[String, Sensor],
   mqtt: MqttParams,
 )
-case class General(name: String, id: String)
+case class General(name: String, id: String, timeZone: Option[String])
 case class Zone(`type`: String, mode: Option[ZoneMode], waterRequirement: Float, valveMqtt: Option[MqttCommand])
 case class WaterSupply(capacity: String, flow: Float, pressure: Float, cmdTopic: Option[String])
 case class Sensor(`type`: String, zones: List[String], stateTopic: String)
@@ -43,9 +43,9 @@ object ZoneMode {
 object Config {
   def loadConfig: Config = {
     implicit val generalDecoder: Decoder[General] =
-      Decoder.forProduct2("name", "id"){ (name: String, id: String) =>
+      Decoder.forProduct3("name", "id", "timeZone"){ (name: String, id: String, timeZone: Option[String]) =>
         if (!id.matches("^[a-zA-Z0-9_]{1,50}$")) throw new RuntimeException("Invalid general.id")
-        General.apply(name, id)
+        General.apply(name, id, timeZone)
       }
     implicit val zoneModeCodec: Codec[ZoneMode] = deriveEnumerationCodec[ZoneMode]
     implicit val zoneKeyDecoder: KeyDecoder[ZoneId] = new KeyDecoder[ZoneId] {

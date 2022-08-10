@@ -6,11 +6,11 @@ import akka.stream.alpakka.mqtt.scaladsl.{MqttSink, MqttSource}
 import akka.stream.scaladsl._
 import akka.util.ByteString
 import akka.Done
+import akka.stream.{BoundedSourceQueue, QueueCompletionResult, QueueOfferResult}
 import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence
 import org.slf4j.{Logger, LoggerFactory}
 
 import scala.concurrent.Future
-import scala.util.Random
 
 trait Mqtt {
   def subscribeToCommandTopic(commandTopicPrefix: String, fn: (String, String) => Unit): Unit
@@ -37,6 +37,13 @@ object Mqtt {
         .withAutomaticReconnect(true)
         .withWill(lastWill)
 
+    val bufferSize = 1000
+
+    val queue: BoundedSourceQueue[MqttMessage] = Source
+      .queue[MqttMessage](bufferSize)
+      .to(MqttSink(connectionSettings.withClientId(s"Permanent publisher: $clientId"), MqttQoS.AtLeastOnce))
+      .run()
+
     def subscribeToCommandTopic(commandTopicPrefix: String, commandCallback: (String, String) => Unit): Unit = {
       val subscriptions = Map(commandTopicPrefix + "/+" -> MqttQoS.atLeastOnce)  // multiple topics => MqttSubscriptions(Map(topic -> Qos))
 
@@ -46,14 +53,19 @@ object Mqtt {
         8
       )
 
-      val (subscribed, streamCompletion) = source
+      val mqttGraph = source
         .wireTap(each => {
           logger.info(s"Sub: $clientId received payload: ${each.payload.utf8String}")
           commandCallback(each.topic, each.payload.utf8String)
         })
+//        .map(each => each.topic -> each.payload.utf8String)
+//        .viaMat(KillSwitches.single)(Keep.right) // Allows to stop stream externally
         //.via()
         .toMat(Sink.ignore)(Keep.both)
-        .run()
+
+//        : ((Future[Done], Future[Done]), Future[MqttMessage])
+      val (subscribed, streamCompletion) = mqttGraph.run()
+//      val ((subscriptionInitialized, listener), streamCompletion) = mqttGraph.run()
 
       subscribed.onComplete {each =>
         logger.info(s"Sub: $clientId subscribed: $each")
@@ -64,14 +76,25 @@ object Mqtt {
 
     def sendCommands(messages: Seq[(String, String, Boolean)]): Unit = {
       //TODO: get rid of random - use persistent connection and some queue
-      val random = Random.alphanumeric.take(31).mkString
-      Source(messages.map {
-        case (topic, payload, retain) =>
-          MqttMessage(topic, ByteString(payload))
-            .withQos(MqttQoS.atLeastOnce)
-            .withRetained(retain)
-      })
-        .runWith(MqttSink(connectionSettings.withClientId(s"sendCommand: $clientId-$random"), MqttQoS.AtLeastOnce))
+//      val random = Random.alphanumeric.take(31).mkString
+//      Source(messages.map {
+//        case (topic, payload, retain) =>
+//          MqttMessage(topic, ByteString(payload))
+//            .withQos(MqttQoS.atLeastOnce)
+//            .withRetained(retain)
+//      })
+//        .runWith(MqttSink(connectionSettings.withClientId(s"sendCommand: $clientId-$random"), MqttQoS.AtLeastOnce))
+      messages.map { case (topic, payload, retain) =>
+        MqttMessage(topic, ByteString(payload))
+          .withQos(MqttQoS.atLeastOnce)
+          .withRetained(retain)
+      }.foreach { message =>
+        queue.offer(message) match {
+          case result: QueueCompletionResult => println(s"QueueCompletionResult: $result")
+          case QueueOfferResult.Enqueued     => println(s"QueueOfferResult.Enqueued")
+          case QueueOfferResult.Dropped      => println(s"QueueOfferResult.Dropped")
+        }
+      }
     }
 
     def sendCommand(topic: String, payload: String, retain: Boolean = false): Unit = {
