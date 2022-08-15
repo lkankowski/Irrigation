@@ -6,28 +6,27 @@ general:
     timeZone: Europe/Warsaw
 
 scheduler:
-    - '21:55'
-    - '21:57'
-    - '21:59'
+    - '21:50'
+    - '04:30'
 
 zones:
     backyard-front:
         type: sprinklers
         mode: Auto
         waterRequirement: 10
-        valveMqtt: { commandTopic: 'abc/def', commandOn: 'ON', commandOff: 'OFF' }
+        valveMqtt: { commandTopic: 'some/topic/for/valve1'}
 
     garden:
         type: sprinklers
         mode: Auto
         waterRequirement: 10
-        valveMqtt: { commandTopic: 'abc/def', commandOn: 'ON', commandOff: 'OFF' }
+        valveMqtt: { commandTopic: 'some/topic/for/valve2', commandOn: 'ON', commandOff: 'OFF' }
 
     thujas:
         type: drip-line
         mode: Auto
         waterRequirement: 10
-        valveMqtt: { commandTopic: 'abc/def', commandOn: 'ON', commandOff: 'OFF' }
+        valveMqtt: { commandTopic: 'some/topic/for/valve3', commandOn: 'CUSTOM_ON', commandOff: 'CUSTOM_OFF' }
 
 waterSupplies:
     grid:

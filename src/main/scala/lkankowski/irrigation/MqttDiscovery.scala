@@ -1,5 +1,6 @@
 package lkankowski.irrigation
 
+
 trait MqttDiscovery {
   def getCommandTopicPrefix: String
   def getStateTopic(suffix: String): String
@@ -29,6 +30,7 @@ object MqttDiscovery {
         command_topic = s"${getCommandTopicPrefix}/${prefix}",
         state_topic = s"${getStateTopicPrefix}/${prefix}",
         options = options,
+//        value_template = s"{{value_json.${prefix}}}"
       )
     }
 
@@ -134,4 +136,3 @@ case class MqttSelectDiscoveryMessage(
 )
 
 case class Device(identifiers: List[String])
-

@@ -3,15 +3,16 @@ package lkankowski.irrigation
 import akka.actor.{Actor, ActorRef, PoisonPill, Props}
 import akka.event.Logging
 
-import scala.concurrent.duration.DurationInt
+import scala.concurrent.duration.{DurationInt, FiniteDuration}
 import scala.concurrent.ExecutionContext
+import Config._
 
 final class MainActor(config: Config) extends Actor {
 
   import MainActor._
 
   private val mqttRef: ActorRef = context.actorOf(Props(new MqttActor(config)), MqttActor.Name)
-  private val schedulerRef: ActorRef = context.actorOf(Props(new SchedulerActor(config.scheduler, config.general.timeZone)), SchedulerActor.Name)
+  private val schedulerRef: ActorRef = context.actorOf(Props(new SchedulerActor(config.general.timeZone)), SchedulerActor.Name)
   private val zonesRef: ActorRef = context.actorOf(Props(new ZonesActor(config, mqttRef, schedulerRef)), ZonesActor.Name)
   implicit val executionContext: ExecutionContext = context.system.getDispatcher
   val logger = Logging(context.system, this)
@@ -20,23 +21,29 @@ final class MainActor(config: Config) extends Actor {
 
   // temporary
   var currentMode: IrrigationMode = IrrigationModeAuto
-  var currentInterval: IrrigationInterval = IrrigationInterval.defaultInterval
+  var currentDuration: IrrigationDuration = IrrigationDuration.defaultDuration
 
   override def receive: Receive = {
 
     case SetMode(payload)          =>
       logger.info(s"MainActor: SetMode($payload)")
-      currentMode = IrrigationMode(payload)
+      IrrigationMode(payload) match {
+        case IrrigationModeNow =>
+          zonesRef ! ZonesActor.StartAllZonesIrrigation(currentDuration.duration)
+        case _ =>
+          currentMode = IrrigationMode(payload)
+      }
+
       mqttRef ! MqttActor.PublishIrrigationMode(currentMode.payload)
 
-    case SetInterval(payload)      =>
-      logger.info(s"MainActor: SetInterval($payload)")
-      currentInterval = IrrigationInterval(payload)
-      mqttRef ! MqttActor.PublishIrrigationInterval(currentInterval.getPayload)
+    case SetDuration(payload) =>
+      logger.info(s"MainActor: SetDuration($payload)")
+      currentDuration = IrrigationDuration(payload)
+      mqttRef ! MqttActor.PublishIrrigationDuration(currentDuration.getPayload)
 
-    case SetZoneState(id, payload) =>
+    case ToggleZoneIrrigation(id, payload) =>
       logger.info(s"MainActor: SetZoneState($id, $payload)")
-      zonesRef ! ZonesActor.SetZoneState(id, payload)
+      zonesRef ! ZonesActor.ToggleZoneIrrigation(id, payload)
 
     case SetZoneMode(id, payload)  =>
       logger.info(s"MainActor: SetZoneMode($id, $payload)")
@@ -53,16 +60,17 @@ final class MainActor(config: Config) extends Actor {
       context.system.scheduler.scheduleOnce(1.second) {
         logger.info("MainActor: sending delayed status messages")
         mqttRef ! MqttActor.PublishIrrigationMode(currentMode.payload)
-        mqttRef ! MqttActor.PublishIrrigationInterval(currentInterval.getPayload)
+        mqttRef ! MqttActor.PublishIrrigationDuration(currentDuration.getPayload)
         zonesRef ! ZonesActor.PublishAllState
         zonesRef ! ZonesActor.PublishAllZoneMode
+        schedulerRef ! SchedulerActor.scheduleIrrigation(config.scheduler)
       }
 
     case IrrigationScheduleOccurred =>
-      println("MainActor: IrrigationScheduleOccurred")
-//      if (currentMode != IrrigationModeOff) {
-//        zonesRef !
-//      }
+      logger.info("MainActor: IrrigationScheduleOccurred")
+      if (currentMode != IrrigationModeOff) {
+        zonesRef ! ZonesActor.StartAllZonesIrrigation(currentDuration.duration)
+      }
   }
 }
 
@@ -70,8 +78,8 @@ object MainActor {
   sealed trait In
   case object Exit extends In
   final case class SetMode(payload: String) extends In
-  final case class SetInterval(payload: String) extends In
-  final case class SetZoneState(id: String, payload: String) extends In
+  final case class SetDuration(payload: String) extends In
+  final case class ToggleZoneIrrigation(id: String, payload: String) extends In
   final case class SetZoneMode(id: String, payload: String) extends In
   case object InitialisationComplete extends In
   case object IrrigationScheduleOccurred extends In
@@ -80,6 +88,7 @@ object MainActor {
   case object IrrigationModeOff extends IrrigationMode(IrrigationMode.Off)
   case object IrrigationModeAuto extends IrrigationMode(IrrigationMode.Auto)
   case object IrrigationModeOneTime extends IrrigationMode(IrrigationMode.OneTime)
+  case object IrrigationModeNow extends IrrigationMode(IrrigationMode.Now)
   object IrrigationMode {
     val Off = "Off"
     val Auto = "Auto"
@@ -91,23 +100,23 @@ object MainActor {
       case Off     => IrrigationModeOff
       case Auto    => IrrigationModeAuto
       case OneTime => IrrigationModeOneTime
-      case Now     => IrrigationModeOneTime
+      case Now     => IrrigationModeNow
     }
   }
 
-  case class IrrigationInterval(interval: Int) {
-    def getPayload: String = s"${interval}min"
+  case class IrrigationDuration(duration: FiniteDuration) {
+    def getPayload: String = s"${duration.toSeconds}min" //TODO: switch to minutes after demo
   }
 
-  case object IrrigationInterval {
-    val list = List("3min", "5min", "7min", "10min", "15min")
-    val defaultInterval = IrrigationInterval(10)
+  case object IrrigationDuration {
+    val list: List[String] = List("3min", "5min", "7min", "10min", "15min")
+    val defaultDuration: IrrigationDuration = IrrigationDuration(10.second) //TODO: switch to minutes after demo
 
-    def apply(payload: String): IrrigationInterval = {
+    def apply(payload: String): IrrigationDuration = {
       if (list.contains(payload)) {
-        IrrigationInterval(payload.replace("min", "").toInt)
+        IrrigationDuration(payload.replace("min", "").toInt.second) //TODO: switch to minutes after demo
       } else {
-        defaultInterval
+        defaultDuration
       }
     }
   }

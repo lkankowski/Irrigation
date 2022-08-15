@@ -1,7 +1,8 @@
 package lkankowski.irrigation
 
-import akka.actor.{Actor, ActorSystem, Props}
+import akka.actor.{Actor, ActorSystem}
 import akka.event.Logging
+import lkankowski.irrigation.Config._
 
 final class MqttActor(config: Config) extends Actor {
   import MqttActor._
@@ -23,8 +24,8 @@ final class MqttActor(config: Config) extends Actor {
     case PublishIrrigationMode(payload)     =>
       mqtt.sendCommand(mqttDiscovery.getStateTopic("mode"), s"{ \"mode\": \"${payload}\" }")
 
-    case PublishIrrigationInterval(payload) =>
-      mqtt.sendCommand(mqttDiscovery.getStateTopic("interval"), s"{ \"mode\": \"${payload}\" }")
+    case PublishIrrigationDuration(payload) =>
+      mqtt.sendCommand(mqttDiscovery.getStateTopic("duration"), s"{ \"mode\": \"${payload}\" }")
 
     case PublishAllState(zonesState)        =>
       mqtt.sendCommands(zonesState.toSeq.map { case (zoneId, payload) => (
@@ -55,9 +56,9 @@ final class MqttActor(config: Config) extends Actor {
         mqttDiscovery.createSelectMessage("Irrigation mode", "mode", MainActor.IrrigationMode.list),
         useRetainForDiscovery)
       )
-    val createIrrigationIntervalDiscoveryMessages = Seq(
-      (mqttDiscovery.getDiscoveryTopic("select", s"interval"),
-        mqttDiscovery.createSelectMessage("Irrigation interval", "interval", MainActor.IrrigationInterval.list),
+    val createIrrigationDurationDiscoveryMessages = Seq(
+      (mqttDiscovery.getDiscoveryTopic("select", s"duration"),
+        mqttDiscovery.createSelectMessage("Irrigation duration", "duration", MainActor.IrrigationDuration.list),
         useRetainForDiscovery)
       )
     val createZoneModeDiscoveryMessages = config.zones.map { case (zoneId, zone) =>
@@ -74,13 +75,14 @@ final class MqttActor(config: Config) extends Actor {
 
     val messages = Seq.concat[(String, String, Boolean)](
       createIrrigationModeDiscoveryMessages,
-      createIrrigationIntervalDiscoveryMessages,
+      createIrrigationDurationDiscoveryMessages,
       createZoneModeDiscoveryMessages,
       createZoneStateDiscoveryMessages,
       createLwtMessage)
 
     mqtt.sendCommands(messages)
   }
+
   def processCommand(topic: String, commandString: String): Unit = {
     import cats.syntax.functor._
     import io.circe.Decoder
@@ -100,8 +102,8 @@ final class MqttActor(config: Config) extends Actor {
       println(s"entity: $entity, id: $id")
       entity match {
         case "mode"      => context.parent ! MainActor.SetMode(commandString)
-        case "interval"  => context.parent ! MainActor.SetInterval(commandString)
-        case "zoneState" => context.parent ! MainActor.SetZoneState(id, commandString)
+        case "duration"  => context.parent ! MainActor.SetDuration(commandString)
+        case "zoneState" => context.parent ! MainActor.ToggleZoneIrrigation(id, commandString)
         case "zoneMode"  => context.parent ! MainActor.SetZoneMode(id, commandString)
         case _           => println("entity not match")
       }
@@ -135,12 +137,12 @@ final class MqttActor(config: Config) extends Actor {
 
 object MqttActor {
   val Name = "Mqtt-actor"
-  def props = Props[MqttActor]()
+//  def props = Props[MqttActor]()
 
   sealed trait In
   case object PublishDiscoveryMessages extends In
   case class PublishIrrigationMode(payload: String) extends In
-  case class PublishIrrigationInterval(payload: String) extends In
+  case class PublishIrrigationDuration(payload: String) extends In
   final case class PublishAllState(zonesState: Map[String, String]) extends In
   final case class PublishState(id: String, state: String) extends In
   final case class PublishAllMode(zonesState: Map[String, String]) extends In

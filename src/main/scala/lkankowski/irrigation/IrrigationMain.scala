@@ -1,6 +1,7 @@
 package lkankowski.irrigation
 
 import akka.actor.{ActorSystem, Props}
+import Config._
 import org.slf4j.{Logger, LoggerFactory}
 
 import scala.util.{Failure, Success, Try}

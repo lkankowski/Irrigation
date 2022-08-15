@@ -2,10 +2,9 @@ package lkankowski.irrigation
 
 import akka.actor.{Actor, ActorRef, ActorSystem}
 import akka.event.Logging
-import cats.implicits._
+import lkankowski.irrigation.Config._
 
-import scala.collection.mutable
-import scala.concurrent.duration.Duration
+import scala.concurrent.duration.FiniteDuration
 import scala.concurrent.ExecutionContext
 
 final class ZonesActor(config: Config, mqttActor: ActorRef, schedulerActor: ActorRef) extends Actor {
@@ -14,9 +13,7 @@ final class ZonesActor(config: Config, mqttActor: ActorRef, schedulerActor: Acto
 
   implicit val executionContext: ExecutionContext = context.system.getDispatcher
 
-  // mutable state - temporary?
-  private val zonesMode: mutable.Map[ZoneId, ZoneMode] = mutable.Map(config.zones.map { case (id, _) => id -> ZoneModeAuto }.toSeq: _*)
-  private val zonesState: mutable.Map[ZoneId, ZoneState] = mutable.Map(config.zones.map { case (id, _) => id -> ZoneOff }.toSeq: _*)
+  private val zones = Zones(config.zones)
 
   private val logger = Logging(context.system, this)
   implicit val system: ActorSystem = context.system
@@ -25,43 +22,55 @@ final class ZonesActor(config: Config, mqttActor: ActorRef, schedulerActor: Acto
 
   override def receive: Receive = {
     case PublishAllState  =>
-      mqttActor ! MqttActor.PublishAllState(zonesState.map { case (zoneId, zoneState) => (zoneId.id, zoneState.payload) }.toMap)
-
-    case SetZoneState(id, payload) =>
-      val state = ZoneState(payload)
-      val zoneId = ZoneId(id)
-      zonesState(zoneId) = state
-      mqttActor ! MqttActor.PublishState(id, state.payload)
-      config.zones(zoneId).valveMqtt.foreach {
-        case MqttCommand(topic, payloadOn, payloadOff) =>
-          val commandPayload = if (state.isOn) payloadOn.getOrElse(MqttDiscovery.payloadOn) else payloadOff.getOrElse(MqttDiscovery.payloadOff)
-          mqttActor ! MqttActor.SendCommand(topic, commandPayload)
-      }
+      println("PublishAllState")
+      mqttActor ! MqttActor.PublishAllState(zones.getAllStates.map { case (key, state) => (key.id, state.payload) })
 
     case PublishAllZoneMode =>
-      mqttActor ! MqttActor.PublishAllMode(zonesMode.map { case (zoneId, zoneMode) => (zoneId.id, zoneMode.payload) }.toMap)
+      mqttActor ! MqttActor.PublishAllMode(zones.getAllModes.map { case (key, mode) => (key.id, mode.payload) })
+
+    case ToggleZoneIrrigation(id, payload) =>
+      //TODO: duration!
+      logger.info(s"ToggleZoneIrrigation: id=${id}, payload=${payload}")
+      val newState = ZoneState(payload)
+      val zoneId = ZoneId(id)
+
+      zones.getAllStates.map { // create tuple: (id, oldState, newState)
+        case (id, oldState) =>  (id, oldState, if (id == zoneId) newState else (if (newState.isOn) ZoneOff else oldState))
+      }.filter { // filter out zones without state change
+        case (_, oldState, newState) => oldState != newState
+      }.toSeq.sortWith { (s1, s2) => s1._3.isOn < s2._3.isOn } // first turn off, then turn on
+        .foreach {
+          case (id, _, newState) => config.zones(id).valveMqtt.foreach { mqttValve =>
+            logger.info(s"ToggleZoneIrrigation: Zone=${id.id}, state=${newState.payload}")
+            toggleValve(mqttValve, newState)
+            zones.changeZoneState(id, newState)
+            mqttActor ! MqttActor.PublishState(id.id, newState.payload)
+          }
+        }
 
     case SetZoneMode(id, payload) =>
-      zonesMode(ZoneId(id)) = ZoneMode(payload)
+      val zoneId = ZoneId(id)
+      zones.changeZoneMode(zoneId, ZoneMode(payload))
       mqttActor ! MqttActor.PublishMode(id, payload)
 
     case StartAllZonesIrrigation(duration) =>
-//      mqttActor ! MqttActor.SendCommand
-//      zonesMode.toSeq
-//        .filter { case (_, mode) => mode == ZoneModeOff }
-//        .map { case (id, _) => id.id }
-//        .zipWithIndex
-//        .foreach { (id, index) =>
-//          context.system.scheduler.scheduleOnce(duration * index) {
-//            mqttActor ! MqttActor.SendCommand
-//          }
-//        }
+      context.self ! ToggleZoneIrrigation(config.zones.head._1.id, ZoneState.PayloadOn)
 
-      // cancel all previous irrigation jobs
-      // run sequentially:
-      // zone 1: start now (0x duration time) for duration time
-      // zone 2: start after 1x duration time for duration time
-      // zone 2: start after 2x duration time for duration time
+      val zonesToBeScheduled = config.zones.tail.toSeq.map {
+        case (id, _) => (id.id, ToggleZoneIrrigation(id.id, ZoneState.PayloadOn))
+      }
+      val turnOffLastCommand = Seq((zonesToBeScheduled.last._1, ToggleZoneIrrigation(zonesToBeScheduled.last._1, ZoneState.PayloadOff)))
+
+      schedulerActor ! SchedulerActor.scheduleZoneCommands(
+        zonesToBeScheduled ++ turnOffLastCommand,
+        duration,
+        duration,
+      )
+  }
+
+  private def toggleValve(valveCommand: MqttCommand, state: ZoneState): Unit = {
+    val commandPayload = if (state.isOn) valveCommand.commandOn.getOrElse(MqttDiscovery.payloadOn) else valveCommand.commandOff.getOrElse(MqttDiscovery.payloadOff)
+    mqttActor ! MqttActor.SendCommand(valveCommand.commandTopic, commandPayload)
   }
 }
 
@@ -72,9 +81,44 @@ object ZonesActor {
   sealed trait In
   case object PublishAllState extends In
   case object PublishAllZoneMode extends In
-  final case class SetZoneState(id: String, payload: String) extends In
+  final case class ToggleZoneIrrigation(id: String, payload: String) extends In
   final case class SetZoneMode(id: String, payload: String) extends In
-  final case class StartAllZonesIrrigation(duration: Duration) extends In
+  final case class StartAllZonesIrrigation(duration: FiniteDuration) extends In
+
+  trait Zones {
+    def changeZoneState(id: ZoneId, newState: ZoneState): Unit
+    def changeZoneMode(id: ZoneId, newMode: ZoneMode): Unit
+    def getAllStates: Map[ZoneId, ZoneState]
+    def getAllModes: Map[ZoneId, ZoneMode]
+  }
+
+  object Zones {
+    import lkankowski.irrigation._
+
+    def apply(configZones: Map[ZoneId, Config.Zone]): Zones = new Zones {
+
+      // mutable state - temporary?
+      var zones = configZones.map { case (id, _) => (id, Zone(id, ZoneOff, ZoneModeAuto)) }
+
+      def changeZoneState(id: ZoneId, newState: ZoneState): Unit =
+        zones = zones.map { case (key, zone) =>
+          if (id == key) (key, zone.copy(state = newState))
+          else (key, zone)
+        }
+
+      def changeZoneMode(id: ZoneId, newMode: ZoneMode): Unit =
+        zones = zones.map { case (key, zone) =>
+          if (id == key) (key, zone.copy(mode = newMode))
+          else (key, zone)
+        }
+
+      def getAllStates: Map[ZoneId, ZoneState] = zones.map { case (key, zone) => (key, zone.state) }
+
+      def getAllModes: Map[ZoneId, ZoneMode] = zones.map { case (key, zone) => (key, zone.mode) }
+    }
+  }
+
+  case class Zone(id: ZoneId, state: ZoneState, mode: ZoneMode)
 
   sealed abstract class ZoneState(val payload: String, val isOn: Boolean)
   case object ZoneOn extends ZoneState(ZoneState.PayloadOn, true)
@@ -84,6 +128,7 @@ object ZonesActor {
     val PayloadOff = MqttDiscovery.payloadOff
 
     def apply(payload: String): ZoneState = if (payload == PayloadOn) ZoneOn else ZoneOff
+    def negate(zoneState: ZoneState): ZoneState = if (zoneState.isOn) ZoneOff else ZoneOn
   }
 
   sealed abstract class ZoneMode(val payload: String)

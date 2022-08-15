@@ -9,6 +9,7 @@ import akka.Done
 import akka.stream.{BoundedSourceQueue, QueueCompletionResult, QueueOfferResult}
 import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence
 import org.slf4j.{Logger, LoggerFactory}
+import Config._
 
 import scala.concurrent.Future
 
@@ -75,15 +76,6 @@ object Mqtt {
     }
 
     def sendCommands(messages: Seq[(String, String, Boolean)]): Unit = {
-      //TODO: get rid of random - use persistent connection and some queue
-//      val random = Random.alphanumeric.take(31).mkString
-//      Source(messages.map {
-//        case (topic, payload, retain) =>
-//          MqttMessage(topic, ByteString(payload))
-//            .withQos(MqttQoS.atLeastOnce)
-//            .withRetained(retain)
-//      })
-//        .runWith(MqttSink(connectionSettings.withClientId(s"sendCommand: $clientId-$random"), MqttQoS.AtLeastOnce))
       messages.map { case (topic, payload, retain) =>
         MqttMessage(topic, ByteString(payload))
           .withQos(MqttQoS.atLeastOnce)
@@ -91,7 +83,7 @@ object Mqtt {
       }.foreach { message =>
         queue.offer(message) match {
           case result: QueueCompletionResult => println(s"QueueCompletionResult: $result")
-          case QueueOfferResult.Enqueued     => println(s"QueueOfferResult.Enqueued")
+          case QueueOfferResult.Enqueued     => ()
           case QueueOfferResult.Dropped      => println(s"QueueOfferResult.Dropped")
         }
       }
