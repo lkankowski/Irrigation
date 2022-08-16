@@ -14,8 +14,8 @@ final class MqttActor(config: Config) extends Actor {
   logger.info(s"${MqttActor.Name}: starting")
 
   private val mqttDiscovery = MqttDiscovery(config.general.id, config.mqtt.discoveryTopicPrefix)
-  val mqtt = Mqtt(config, mqttDiscovery)
-  mqtt.subscribeToCommandTopic(mqttDiscovery.getCommandTopicPrefix, processCommand)
+  private val mqtt = Mqtt(config, mqttDiscovery)
+  private val killSwitch = mqtt.subscribeToCommandTopic(mqttDiscovery.getCommandTopicPrefix, processCommand)
 
   override def receive: Receive = {
     case PublishDiscoveryMessages           =>
@@ -105,6 +105,7 @@ final class MqttActor(config: Config) extends Actor {
         case "duration"  => context.parent ! MainActor.SetDuration(commandString)
         case "zoneState" => context.parent ! MainActor.ToggleZoneIrrigation(id, commandString)
         case "zoneMode"  => context.parent ! MainActor.SetZoneMode(id, commandString)
+        case "exit"      => context.parent ! MainActor.Exit; killSwitch.shutdown()
         case _           => println("entity not match")
       }
     }

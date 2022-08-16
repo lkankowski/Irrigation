@@ -18,9 +18,9 @@ And now you can execute various commands.
 ```shell
 mosquitto_sub -h 127.0.0.1 -p 1883 -t '#' -v
 ```
-* Send `ON` message into command topic `cmnd/irrigation1/MODE`:
+* Send `Auto` message into command topic `cmnd/irrigation1/mode`:
 ```shell
-mosquitto_pub -h 127.0.0.1 -p 1883 -t 'cmnd/irrigation1/MODE' -m 'ON'
+mosquitto_pub -h 127.0.0.1 -p 1883 -t 'cmnd/irrigation1/mode' -m 'Auto'
 ```
 Clear retained message:
 ```shell
@@ -28,7 +28,7 @@ mosquitto_pub -h 127.0.0.1 -p 1883 -t 'homeassistant/select/irrigation1_zone_thu
 ```
 * Temporary exit command:
 ```shell
-mosquitto_pub -h 127.0.0.1 -p 1883 -t 'cmnd/irrigation1/MODE' -m 'exit'
+mosquitto_pub -h 127.0.0.1 -p 1883 -t 'cmnd/irrigation1/exit' -m 'exit'
 ```
 
 ## Inspirations & other sources

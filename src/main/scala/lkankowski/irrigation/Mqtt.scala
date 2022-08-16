@@ -6,15 +6,15 @@ import akka.stream.alpakka.mqtt.scaladsl.{MqttSink, MqttSource}
 import akka.stream.scaladsl._
 import akka.util.ByteString
 import akka.Done
-import akka.stream.{BoundedSourceQueue, QueueCompletionResult, QueueOfferResult}
+import akka.stream.{BoundedSourceQueue, KillSwitch, KillSwitches, QueueCompletionResult, QueueOfferResult}
+import lkankowski.irrigation.Config._
 import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence
 import org.slf4j.{Logger, LoggerFactory}
-import Config._
 
 import scala.concurrent.Future
 
 trait Mqtt {
-  def subscribeToCommandTopic(commandTopicPrefix: String, fn: (String, String) => Unit): Unit
+  def subscribeToCommandTopic(commandTopicPrefix: String, fn: (String, String) => Unit): KillSwitch
   def sendCommands(messages: Seq[(String, String, Boolean)]): Unit
   def sendCommand(topic: String, payload: String, retain: Boolean = false): Unit
 }
@@ -45,7 +45,7 @@ object Mqtt {
       .to(MqttSink(connectionSettings.withClientId(s"Permanent publisher: $clientId"), MqttQoS.AtLeastOnce))
       .run()
 
-    def subscribeToCommandTopic(commandTopicPrefix: String, commandCallback: (String, String) => Unit): Unit = {
+    def subscribeToCommandTopic(commandTopicPrefix: String, commandCallback: (String, String) => Unit): KillSwitch = {
       val subscriptions = Map(commandTopicPrefix + "/+" -> MqttQoS.atLeastOnce)  // multiple topics => MqttSubscriptions(Map(topic -> Qos))
 
       val source: Source[MqttMessage, Future[Done]] = MqttSource.atMostOnce(
@@ -60,19 +60,18 @@ object Mqtt {
           commandCallback(each.topic, each.payload.utf8String)
         })
 //        .map(each => each.topic -> each.payload.utf8String)
-//        .viaMat(KillSwitches.single)(Keep.right) // Allows to stop stream externally
-        //.via()
+        .viaMat(KillSwitches.single)(Keep.both) // Allows to stop stream externally
         .toMat(Sink.ignore)(Keep.both)
 
-//        : ((Future[Done], Future[Done]), Future[MqttMessage])
-      val (subscribed, streamCompletion) = mqttGraph.run()
-//      val ((subscriptionInitialized, listener), streamCompletion) = mqttGraph.run()
+      val ((subscribed, killSwitch), streamCompletion) = mqttGraph.run()
 
       subscribed.onComplete {each =>
         logger.info(s"Sub: $clientId subscribed: $each")
         context.parent ! MainActor.InitialisationComplete
       }
       streamCompletion.recover { case ex => logger.error(s"Sub stream failed with: ${ex.getCause}") }
+
+      killSwitch
     }
 
     def sendCommands(messages: Seq[(String, String, Boolean)]): Unit = {
